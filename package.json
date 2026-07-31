@@ -1,0 +1,7 @@
+{
+  "name": "osl-price-tracker",
+  "private": true,
+  "dependencies": {
+    "playwright-core": "^1.45.0"
+  }
+}
