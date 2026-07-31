@@ -4,11 +4,16 @@
 StubHub bot-blocks plain HTTP (403), so we load the page in a real fingerprinted
 browser via Browserbase and read the server-rendered ticket-class cards.
 
-Usage:
+Usage (direct mode, local):
     BROWSERBASE_API_KEY=... BROWSERBASE_PROJECT_ID=... python3 check_price.py
+    Requires: pip install playwright (client lib only; the browser runs remotely,
+    no `playwright install` needed).
 
-Requires: pip install playwright  (client lib only; the browser runs remotely,
-no `playwright install` needed).
+Usage (relay mode, for environments that cannot reach api.browserbase.com,
+e.g. the Claude cloud sandbox whose egress proxy blocks it):
+    RELAY_URL=https://osl-price-tracker.vercel.app/api/price \
+    BROWSERBASE_API_KEY=... BROWSERBASE_PROJECT_ID=... python3 check_price.py
+    No third-party packages needed; the Vercel function does the scrape.
 
 Appends one row to history.jsonl and prints a JSON verdict to stdout.
 Exit 0 on success (verdict carries the alert flag), exit 2 on scrape failure.
@@ -80,22 +85,41 @@ def parse_prices(text):
     return prices
 
 
+def get_prices_via_relay():
+    req = urllib.request.Request(
+        os.environ["RELAY_URL"],
+        headers={
+            "x-bb-key": os.environ["BROWSERBASE_API_KEY"],
+            "x-bb-project": os.environ["BROWSERBASE_PROJECT_ID"],
+        },
+    )
+    data = json.loads(urllib.request.urlopen(req, timeout=90).read())
+    if not data.get("ok"):
+        raise RuntimeError("relay error: " + json.dumps(data)[:500])
+    return data["prices"]
+
+
 def main():
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    text = None
     try:
-        text = get_page_text()
-        prices = parse_prices(text)
+        if os.environ.get("RELAY_URL"):
+            prices = get_prices_via_relay()
+        else:
+            text = get_page_text()
+            prices = parse_prices(text)
     except Exception as e:
         print(json.dumps({"ok": False, "ts": now, "error": f"{type(e).__name__}: {e}"}))
         sys.exit(2)
 
     if "GA" not in prices:
-        with open(os.path.join(HERE, "last_page_text.txt"), "w") as f:
-            f.write(text)
+        if text is not None:
+            with open(os.path.join(HERE, "last_page_text.txt"), "w") as f:
+                f.write(text)
         print(json.dumps({
             "ok": False, "ts": now,
-            "error": "GA price not found on page; raw text saved to last_page_text.txt "
-                     "(page layout may have changed, or listings sold out)",
+            "error": "GA price not found on page; page layout may have changed, "
+                     "or listings sold out",
             "partial_prices": prices,
         }))
         sys.exit(2)
