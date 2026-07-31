@@ -99,6 +99,15 @@ def get_prices_via_relay():
     return data["prices"]
 
 
+def emit(verdict):
+    """Print the verdict and persist it to verdict.json for downstream consumers
+    (the notification routine reads verdict.json from git, it cannot run the scrape)."""
+    out = json.dumps(verdict, indent=2)
+    with open(os.path.join(HERE, "verdict.json"), "w") as f:
+        f.write(out + "\n")
+    print(out)
+
+
 def main():
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     text = None
@@ -109,19 +118,19 @@ def main():
             text = get_page_text()
             prices = parse_prices(text)
     except Exception as e:
-        print(json.dumps({"ok": False, "ts": now, "error": f"{type(e).__name__}: {e}"}))
+        emit({"ok": False, "ts": now, "error": f"{type(e).__name__}: {e}"})
         sys.exit(2)
 
     if "GA" not in prices:
         if text is not None:
             with open(os.path.join(HERE, "last_page_text.txt"), "w") as f:
                 f.write(text)
-        print(json.dumps({
+        emit({
             "ok": False, "ts": now,
             "error": "GA price not found on page; page layout may have changed, "
                      "or listings sold out",
             "partial_prices": prices,
-        }))
+        })
         sys.exit(2)
 
     history = []
@@ -143,7 +152,7 @@ def main():
     if prev is not None and prev > ga and (prev - ga) / prev >= 0.05:
         alerts.append(f"BIG DROP: GA fell {(prev - ga) / prev:.0%} since last check (${prev} -> ${ga})")
 
-    print(json.dumps({
+    emit({
         "ok": True,
         "ts": now,
         "prices": prices,
@@ -154,7 +163,7 @@ def main():
         "alert": bool(alerts),
         "alerts": alerts,
         "event_url": EVENT_URL,
-    }, indent=2))
+    })
 
 
 if __name__ == "__main__":

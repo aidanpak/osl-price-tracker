@@ -1,20 +1,22 @@
 # OSL Price Tracker
 
-Tracks StubHub prices for Outside Lands Saturday (Aug 8, 2026), mainly the General Admission pass, so Aidan can buy near the bottom. This repo is public and contains no secrets: credentials live only in the cloud routine's configuration.
+Tracks StubHub prices for Outside Lands Saturday (Aug 8, 2026), mainly the General Admission pass, so Aidan can buy near the bottom. This repo is public and contains no secrets.
 
 Event: https://www.stubhub.com/outside-lands-music-festival-san-francisco-tickets-8-8-2026/event/159253857/?quantity=1
 
-## How it works
+## Architecture
 
-- `check_price.py` opens the event page in a real browser via Browserbase (StubHub 403s plain HTTP and Exa livecrawl), parses the ticket-class cards (GA, VIP, GA+, Golden Gate Pass), and appends one row to `history.jsonl`. Prices are per single ticket, fees included.
-- A scheduled Claude Code cloud routine runs every 3 hours: it clones this repo read-only over HTTPS (the sandbox's egress proxy blocks SSH and git pushes are not possible without a token), restores `history.jsonl` from a Gmail draft titled "OSL price history log" that serves as the persistent state store, runs the script, writes the updated history back to that draft, and notifies via Gmail draft (plus a Google Calendar event 15 minutes out on real alerts, so a phone notification fires).
-- The `history.jsonl` in this repo is only the day-one seed. The live history lives in the Gmail state draft.
+Two halves, split by what each environment is allowed to do:
 
-## Alert rules
+1. **Scraper: GitHub Action** (`.github/workflows/price-check.yml`), cron every 3 hours at :00 UTC. Runs `check_price.py`, which opens the event page in a real browser via Browserbase (StubHub 403s plain HTTP, headless local browsers, and crawler APIs), parses the ticket-class cards (GA, VIP, GA+, Golden Gate Pass), appends one row to `history.jsonl`, and writes `verdict.json` (current prices + alert decision). The Action commits both, so **git history is the price database**. Browserbase credentials live in the repo's Actions secrets.
+2. **Notifier: Claude Code cloud routine**, cron every 3 hours at :20 UTC. The Claude cloud sandbox egress-allowlists only GitHub and package hosts (Browserbase, Vercel, and every other host are blocked, which is why the scrape cannot happen there). It clones this repo read-only, reads `verdict.json`, and on a fresh alert creates a Gmail draft with the details plus a Google Calendar event 15 minutes out so a phone notification fires. Daily summary draft at the 15:20 UTC run (8:20am PT). Prices are per single ticket, fees included.
+
+`api/price.js` is a stateless Vercel relay from an earlier iteration (caller supplies Browserbase creds as headers). The pipeline no longer uses it; kept because it costs nothing and may be handy for ad-hoc checks.
+
+## Alert rules (in `check_price.py`)
 
 - New all-time low for GA, or
 - GA dropped 5% or more since the previous check.
-- Daily 6am PT summary draft regardless, plus a failure draft if anything breaks.
 
 ## Running locally
 
@@ -26,6 +28,6 @@ python3 check_price.py
 
 ## Knobs
 
-- Cadence: edit the routine at https://claude.ai/code/routines
-- Alert thresholds: the alert math is in `check_price.py` (verdict section); the cloud agent picks up script changes on its next clone.
-- After Aug 8, 2026 the routine drafts a final "delete me" email and stops doing work.
+- Scrape cadence: the workflow cron. Notify cadence: the routine at https://claude.ai/code/routines (keep it ~20 min after the workflow).
+- Alert thresholds: the alert math in `check_price.py`.
+- After Aug 8, 2026: delete the routine, disable the workflow, archive the repo.
