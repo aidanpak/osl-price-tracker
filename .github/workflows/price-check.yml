@@ -64,3 +64,11 @@ jobs:
             echo "Buy now: $(jq -r '.event_url' verdict.json)"
           } > /tmp/issue_body.md
           gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/issue_body.md
+      - name: Email alert (Gmail SMTP)
+        if: always()
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TEST_ALERT: ${{ inputs.test_alert }}
+        run: |
+          [ -n "$GMAIL_APP_PASSWORD" ] || { echo "GMAIL_APP_PASSWORD not set, skipping email"; exit 0; }
+          python3 send_alert_email.py
