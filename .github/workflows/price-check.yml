@@ -3,8 +3,14 @@ on:
   schedule:
     - cron: '0 0,3,6,9,12,15,18,21 * * *'
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: 'File a test alert issue regardless of price movement'
+        type: boolean
+        default: false
 permissions:
   contents: write
+  issues: write
 concurrency: price-check
 jobs:
   check:
@@ -28,3 +34,33 @@ jobs:
           git add -A
           git diff --cached --quiet || git commit -m "price check $(date -u +%FT%TZ)"
           git push
+      # A GitHub issue is the notification channel that actually reaches a phone:
+      # GitHub emails the repo owner on issues opened by the actions bot (and the
+      # GitHub mobile app pushes). Gmail-MCP drafts and short-lead calendar events
+      # from the cloud routine both proved silent.
+      - name: Alert via GitHub issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_ALERT: ${{ inputs.test_alert }}
+        run: |
+          alert=$(jq -r '.ok and .alert' verdict.json 2>/dev/null || echo false)
+          [ "$alert" = "true" ] || [ "$TEST_ALERT" = "true" ] || exit 0
+          if [ "$alert" = "true" ]; then
+            title="$(jq -r '.alerts[0]' verdict.json)"
+          else
+            title="TEST ALERT: GA \$$(jq -r '.ga' verdict.json) (plumbing check, close me)"
+          fi
+          {
+            echo "GA: \$$(jq -r '.ga' verdict.json) (prev \$$(jq -r '.prev_ga' verdict.json), all-time low \$$(jq -r '.alltime_low_ga' verdict.json), check #$(jq -r '.n_checks' verdict.json))"
+            echo ""
+            echo "All tiers: \`$(jq -c '.prices' verdict.json)\`"
+            echo ""
+            echo "Last 10 checks (UTC):"
+            echo '```'
+            tail -10 history.jsonl | jq -r '"\(.ts)  GA $\(.prices.GA // "?")"'
+            echo '```'
+            echo ""
+            echo "Buy now: $(jq -r '.event_url' verdict.json)"
+          } > /tmp/issue_body.md
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/issue_body.md
