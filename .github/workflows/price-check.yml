@@ -1,7 +1,9 @@
 name: price-check
 on:
   schedule:
-    - cron: '0 0,3,6,9,12,15,18,21 * * *'
+    # Hourly at :17 — off-peak minute so GitHub's scheduler queue doesn't delay
+    # runs the way :00 did (30-50 min drift observed).
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       test_alert:
@@ -52,9 +54,9 @@ jobs:
             title="TEST ALERT: GA \$$(jq -r '.ga' verdict.json) (plumbing check, close me)"
           fi
           {
-            echo "GA: \$$(jq -r '.ga' verdict.json) (prev \$$(jq -r '.prev_ga' verdict.json), all-time low \$$(jq -r '.alltime_low_ga' verdict.json), check #$(jq -r '.n_checks' verdict.json))"
+            echo "GA 1 ticket: \$$(jq -r '.ga' verdict.json) (prev \$$(jq -r '.prev_ga' verdict.json), low \$$(jq -r '.alltime_low_ga' verdict.json)); 2 tickets: \$$(jq -r '.ga2' verdict.json) (low \$$(jq -r '.alltime_low_ga2' verdict.json)); check #$(jq -r '.n_checks' verdict.json)"
             echo ""
-            echo "All tiers: \`$(jq -c '.prices' verdict.json)\`"
+            echo "All tiers 1x: \`$(jq -c '.prices' verdict.json)\` 2x: \`$(jq -c '.prices2' verdict.json)\`"
             echo ""
             echo "Last 10 checks (UTC):"
             echo '```'

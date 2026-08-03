@@ -24,15 +24,29 @@ if not (v.get("ok") and (v.get("alert") or test)):
 with open(os.path.join(HERE, "history.jsonl")) as f:
     tail = [json.loads(l) for l in f if l.strip()][-10:]
 
+
+def dollars(x):
+    return f"${x}" if x is not None else "n/a"
+
+
 subject = "[OSL Tracker] " + (
-    v["alerts"][0] if v.get("alerts") else f"TEST: GA ${v['ga']} (plumbing check)"
+    v["alerts"][0] if v.get("alerts") else f"TEST: GA {dollars(v['ga'])} (plumbing check)"
 )
 lines = [
-    f"GA: ${v['ga']}  (prev ${v['prev_ga']}, all-time low ${v['alltime_low_ga']}, check #{v['n_checks']})",
-    f"All tiers: {json.dumps(v['prices'])}",
+    f"GA 1 ticket:  {dollars(v.get('ga'))}  (prev {dollars(v.get('prev_ga'))}, low {dollars(v.get('alltime_low_ga'))})",
+    f"GA 2 tickets: {dollars(v.get('ga2'))}  (prev {dollars(v.get('prev_ga2'))}, low {dollars(v.get('alltime_low_ga2'))})",
+    f"Check #{v['n_checks']}",
     "",
-    "Last 10 checks (UTC):",
-    *[f"  {r['ts']}  GA ${r['prices'].get('GA', '?')}" for r in tail],
+    *[f"ALERT: {a}" for a in v.get("alerts", [])],
+    "",
+    f"All tiers, 1 ticket:  {json.dumps(v['prices'])}",
+    f"All tiers, 2 tickets: {json.dumps(v.get('prices2', {}))}",
+    "",
+    "Last 10 checks (UTC, GA 1x / 2x):",
+    *[
+        f"  {r['ts']}  {dollars(r['prices'].get('GA'))} / {dollars(r.get('prices2', {}).get('GA'))}"
+        for r in tail
+    ],
     "",
     f"Buy now: {v['event_url']}",
 ]

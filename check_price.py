@@ -3,17 +3,18 @@
 
 StubHub bot-blocks plain HTTP (403), so we load the page in a real fingerprinted
 browser via Browserbase and read the server-rendered ticket-class cards.
+Scrapes the page twice in one session: quantity=1 and quantity=2, since the
+cheapest listing differs by how many tickets a listing can sell.
 
 Usage (direct mode, local):
     BROWSERBASE_API_KEY=... BROWSERBASE_PROJECT_ID=... python3 check_price.py
     Requires: pip install playwright (client lib only; the browser runs remotely,
     no `playwright install` needed).
 
-Usage (relay mode, for environments that cannot reach api.browserbase.com,
-e.g. the Claude cloud sandbox whose egress proxy blocks it):
+Usage (relay mode, legacy, quantity=1 only, for environments that cannot reach
+api.browserbase.com):
     RELAY_URL=https://osl-price-tracker.vercel.app/api/price \
     BROWSERBASE_API_KEY=... BROWSERBASE_PROJECT_ID=... python3 check_price.py
-    No third-party packages needed; the Vercel function does the scrape.
 
 Appends one row to history.jsonl and prints a JSON verdict to stdout.
 Exit 0 on success (verdict carries the alert flag), exit 2 on scrape failure.
@@ -25,12 +26,17 @@ import re
 import sys
 import urllib.request
 
-EVENT_URL = (
+EVENT_URL_BASE = (
     "https://www.stubhub.com/outside-lands-music-festival-san-francisco-tickets-8-8-2026/"
-    "event/159253857/?quantity=1"
+    "event/159253857/?quantity={q}"
 )
+EVENT_URL = EVENT_URL_BASE.format(q=1)
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
+
+# With hourly checks, cheapest-listing churn makes 5%-per-check drops common
+# noise; NEW LOW stays the buy signal and BIG DROP only flags real capitulation.
+BIG_DROP = 0.08
 
 # Ticket-class card headings as they appear in page text, mapped to short keys.
 CLASS_NAMES = {
@@ -41,7 +47,7 @@ CLASS_NAMES = {
 }
 
 
-def get_page_text():
+def get_page_texts(quantities):
     api_key = os.environ["BROWSERBASE_API_KEY"]
     project_id = os.environ["BROWSERBASE_PROJECT_ID"]
     req = urllib.request.Request(
@@ -53,15 +59,17 @@ def get_page_text():
 
     from playwright.sync_api import sync_playwright
 
+    texts = {}
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(sess["connectUrl"])
         ctx = browser.contexts[0]
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(EVENT_URL, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(12000)
-        text = page.evaluate("document.body.innerText")
+        for q in quantities:
+            page.goto(EVENT_URL_BASE.format(q=q), wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(12000)
+            texts[q] = page.evaluate("document.body.innerText")
         browser.close()
-    return text
+    return texts
 
 
 def parse_prices(text):
@@ -108,28 +116,42 @@ def emit(verdict):
     print(out)
 
 
+def ga_alerts(label, ga, prev, low):
+    alerts = []
+    if ga is None:
+        return alerts
+    if low is not None and ga < low:
+        alerts.append(f"NEW LOW ({label}): GA ${ga} (previous low ${low})")
+    if prev is not None and prev > ga and (prev - ga) / prev >= BIG_DROP:
+        alerts.append(
+            f"BIG DROP ({label}): GA fell {(prev - ga) / prev:.0%} since last check (${prev} -> ${ga})"
+        )
+    return alerts
+
+
 def main():
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-    text = None
+    texts = None
     try:
         if os.environ.get("RELAY_URL"):
-            prices = get_prices_via_relay()
+            prices, prices2 = get_prices_via_relay(), {}
         else:
-            text = get_page_text()
-            prices = parse_prices(text)
+            texts = get_page_texts([1, 2])
+            prices = parse_prices(texts[1])
+            prices2 = parse_prices(texts[2])
     except Exception as e:
         emit({"ok": False, "ts": now, "error": f"{type(e).__name__}: {e}"})
         sys.exit(2)
 
-    if "GA" not in prices:
-        if text is not None:
+    if "GA" not in prices and "GA" not in prices2:
+        if texts is not None:
             with open(os.path.join(HERE, "last_page_text.txt"), "w") as f:
-                f.write(text)
+                f.write((texts.get(1) or "") + "\n----- quantity=2 -----\n" + (texts.get(2) or ""))
         emit({
             "ok": False, "ts": now,
-            "error": "GA price not found on page; page layout may have changed, "
-                     "or listings sold out",
-            "partial_prices": prices,
+            "error": "GA price not found on either quantity page; page layout may "
+                     "have changed, or listings sold out",
+            "partial_prices": {"q1": prices, "q2": prices2},
         })
         sys.exit(2)
 
@@ -138,27 +160,31 @@ def main():
         with open(HISTORY) as f:
             history = [json.loads(l) for l in f if l.strip()]
 
-    ga = prices["GA"]
-    prev = history[-1]["prices"].get("GA") if history else None
-    past_lows = [h["prices"]["GA"] for h in history if h["prices"].get("GA")]
-    alltime_low = min(past_lows) if past_lows else None
+    def series(key):
+        return [h[key]["GA"] for h in history if h.get(key, {}).get("GA")]
+
+    ga, ga2 = prices.get("GA"), prices2.get("GA")
+    prev = (series("prices") or [None])[-1]
+    prev2 = (series("prices2") or [None])[-1]
+    low = min(series("prices")) if series("prices") else None
+    low2 = min(series("prices2")) if series("prices2") else None
 
     with open(HISTORY, "a") as f:
-        f.write(json.dumps({"ts": now, "prices": prices}) + "\n")
+        f.write(json.dumps({"ts": now, "prices": prices, "prices2": prices2}) + "\n")
 
-    alerts = []
-    if alltime_low is not None and ga < alltime_low:
-        alerts.append(f"NEW LOW: GA ${ga} (previous low ${alltime_low})")
-    if prev is not None and prev > ga and (prev - ga) / prev >= 0.05:
-        alerts.append(f"BIG DROP: GA fell {(prev - ga) / prev:.0%} since last check (${prev} -> ${ga})")
+    alerts = ga_alerts("1 ticket", ga, prev, low) + ga_alerts("2 tickets", ga2, prev2, low2)
 
     emit({
         "ok": True,
         "ts": now,
         "prices": prices,
-        "ga": ga,
+        "prices2": prices2,
+        "ga": ga if ga is not None else ga2,
+        "ga2": ga2,
         "prev_ga": prev,
-        "alltime_low_ga": alltime_low if alltime_low is not None else ga,
+        "prev_ga2": prev2,
+        "alltime_low_ga": low if low is not None else ga,
+        "alltime_low_ga2": low2 if low2 is not None else ga2,
         "n_checks": len(history) + 1,
         "alert": bool(alerts),
         "alerts": alerts,
