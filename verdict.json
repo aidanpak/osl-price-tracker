@@ -1,23 +1,23 @@
 {
   "ok": true,
-  "ts": "2026-08-06T15:36:06+00:00",
+  "ts": "2026-08-07T00:17:37+00:00",
   "prices": {
-    "GA": 752,
-    "GA+": 819,
-    "VIP": 1216
+    "GA": 828,
+    "GA+": 1191,
+    "VIP": 2103
   },
   "prices2": {
-    "GA": 752,
-    "GA+": 830,
-    "VIP": 1216
+    "GA": 828,
+    "GA+": 1191,
+    "VIP": 2103
   },
-  "ga": 752,
-  "ga2": 752,
-  "prev_ga": 768,
-  "prev_ga2": 768,
+  "ga": 828,
+  "ga2": 828,
+  "prev_ga": 752,
+  "prev_ga2": 752,
   "alltime_low_ga": 466,
   "alltime_low_ga2": 468,
-  "n_checks": 54,
+  "n_checks": 55,
   "alert": false,
   "alerts": [],
   "event_url": "https://www.stubhub.com/outside-lands-music-festival-san-francisco-tickets-8-8-2026/event/159253857/?quantity=1"
